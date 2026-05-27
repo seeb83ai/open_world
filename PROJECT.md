@@ -48,11 +48,13 @@ The world is a **directed graph**, not a grid:
 
 Each item has:
 - **Name & description**
-- **Durability** (items can break; broken items can be repaired)
+- **Quality** (starts high, degrades with use; below quality threshold, certain actions are restricted or fail)
+- **Durability** (items can break; broken items can be repaired; quality and durability are tracked separately)
 - **Carrying capacity modifier** (bags expand capacity, vehicles expand more dramatically)
-- **Enabled actions** (what this item lets the player do)
-- **Travel restrictions** (car can't enter house; rocket can't navigate tunnels)
+- **Enabled actions** (what this item lets the player do; quality thresholds may restrict them)
+- **Connection restrictions** (car can't enter house; small key can't open large locks; boots needed for muddy areas)
 - **Connection requirements** (car needs roads; boat needs water; wings need open sky)
+- **Quality-dependent actions** (worn key has lower success rate; rusty lockpick might break inside lock)
 - **Repair recipe** (what tools/items fix this item if broken)
 
 ### Inventory & Capacity
@@ -139,8 +141,9 @@ Each puzzle has:
 
 - **Database tracks**:
   - Area state (items present, puzzle states, environmental changes)
-  - Item properties (durability, location, ownership)
+  - Item properties (quality, durability, location, ownership)
   - Player snapshots (last position, inventory)
+  - **Event log**: Every player action recorded with user ID, area ID, timestamp, action description, outcome
 
 ### Async Interaction Model (Initial)
 
