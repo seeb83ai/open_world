@@ -151,6 +151,21 @@ Each puzzle has:
 - No real-time synchronization initially
 - Players affect each other through shared resources and consequences
 
+### Event Logging
+
+- **Every player action** is logged immutably:
+  - User ID
+  - Area ID
+  - Timestamp
+  - Action description (e.g., "collected rusty key from chest", "failed to unlock door with worn lockpick")
+  - Outcome (success/failure/unintended consequence)
+- **Use cases**:
+  - Player audit trail (who did what, when, where)
+  - Forensics (reconstruct area history)
+  - Anti-cheating evidence
+  - Analytics (popular items, common puzzles, player flow)
+  - Potential future: player trading/economy (proof of item ownership)
+
 ### Future Real-Time Enhancement
 
 - Multiple players in the same area can see each other
