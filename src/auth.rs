@@ -64,3 +64,70 @@ where
         Err(AppError::Unauthorized)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_jwt_auth_creation() {
+        let secret = "test-secret".to_string();
+        let auth = JwtAuth::new(secret.clone());
+        assert_eq!(auth.secret, secret);
+    }
+
+    #[test]
+    fn test_jwt_encode_and_decode() {
+        let secret = "test-secret-key".to_string();
+        let auth = JwtAuth::new(secret);
+        let user_id = Uuid::new_v4();
+
+        // Encode token
+        let token = auth.encode(user_id, 24).expect("Failed to encode");
+        assert!(!token.is_empty());
+
+        // Decode token
+        let claims = auth.decode(&token).expect("Failed to decode");
+        assert_eq!(claims.sub, user_id.to_string());
+    }
+
+    #[test]
+    fn test_jwt_invalid_token() {
+        let secret = "test-secret-key".to_string();
+        let auth = JwtAuth::new(secret);
+
+        let result = auth.decode("invalid-token");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), AppError::Unauthorized));
+    }
+
+    #[test]
+    fn test_jwt_wrong_secret() {
+        let secret1 = "secret1".to_string();
+        let secret2 = "secret2".to_string();
+        let auth1 = JwtAuth::new(secret1);
+        let auth2 = JwtAuth::new(secret2);
+        let user_id = Uuid::new_v4();
+
+        // Encode with secret1
+        let token = auth1.encode(user_id, 24).expect("Failed to encode");
+
+        // Try to decode with secret2
+        let result = auth2.decode(&token);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_claims_structure() {
+        let user_id = Uuid::new_v4();
+        let exp = chrono::Utc::now().timestamp() + 3600;
+
+        let claims = Claims {
+            sub: user_id.to_string(),
+            exp,
+        };
+
+        assert_eq!(claims.sub, user_id.to_string());
+        assert_eq!(claims.exp, exp);
+    }
+}

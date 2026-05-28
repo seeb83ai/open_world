@@ -53,3 +53,44 @@ impl IntoResponse for AppError {
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_error_not_found() {
+        let err = AppError::NotFound;
+        assert_eq!(err.to_string(), "Not found");
+    }
+
+    #[test]
+    fn test_app_error_unauthorized() {
+        let err = AppError::Unauthorized;
+        assert_eq!(err.to_string(), "Unauthorized");
+    }
+
+    #[test]
+    fn test_app_error_validation_error() {
+        let err = AppError::ValidationError("email is required".to_string());
+        assert!(err.to_string().contains("email is required"));
+    }
+
+    #[test]
+    fn test_app_error_conflict() {
+        let err = AppError::ConflictError("user already exists".to_string());
+        assert!(err.to_string().contains("user already exists"));
+    }
+
+    #[test]
+    fn test_app_error_internal() {
+        let err = AppError::InternalError("database connection failed".to_string());
+        assert!(err.to_string().contains("database connection failed"));
+    }
+
+    #[test]
+    fn test_app_error_database() {
+        let err = AppError::DatabaseError("query failed".to_string());
+        assert!(err.to_string().contains("query failed"));
+    }
+}
