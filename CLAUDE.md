@@ -1,240 +1,266 @@
-# Open World — Architecture & Implementation Plan
+# Open World — Technical Specification
 
-## Overview
+## Tech Stack
 
-A persistent, AI-generated, multiplayer text-based exploration game playable in browser or CLI. Players explore a graph-based world of interconnected areas, discover items, solve puzzles, and gradually deplete shared resources.
+- **Backend**: Rust
+  - Framework: **Axum** (async web framework)
+  - ORM: **Diesel** (with SQLite)
+  - Templates: **Askama** (server-side rendering, compile-time templates)
+  - Authentication: **JWT tokens** (user UUID in token)
+  - Logging: **tracing** crate
+  - Migrations: **Diesel CLI** (automatic on app startup)
 
----
+- **Frontend**: HTML/JavaScript with Askama templates (server-side rendering)
+  - No SPA framework; simple progressive enhancement
+  
+- **Database**: SQLite (with Diesel ORM)
 
-## Core Systems
+- **E2E Testing**: Playwright
 
-### 1. World Structure (Graph-Based)
-
-**Not a grid.** The world is a **directed graph** where:
-- **Nodes** = Areas (UUID, one-sentence description, persistent state)
-- **Edges** = Connections between areas (each edge has a short description for context)
-
-**Initial world:**
-- 100 pre-generated areas with AI-generated descriptions
-- Connections between areas (variable number of exits per area; some dead ends allowed if escapable)
-- All descriptions AI-generated at server startup
-
-**Graph expansion:**
-- When < 50 unseen areas remain, generate new batch
-- When a generated area "benefits from new connection" (TBD: criteria for this)
-- New areas always connect to unvisited areas only (unless player creates connection via action)
-- Player-created connections (dig tunnel, break wall) can connect to visited areas
+- **Network**: HTTP (WebSockets deferred for future real-time features)
 
 ---
 
-### 2. Persistence & Shared State
+## Project Structure
 
-**Database tracks:**
-- Area state (items present, puzzle states, environmental changes)
-- Item state (quality, durability, location, ownership)
-- Player snapshots (last known position, inventory)
-- **Event log**: Every player action recorded with user ID, area ID, timestamp, action description, outcome
+```
+src/
+  main.rs                 (entry point, app setup)
+  lib.rs                  (library exports)
+  models/                 (data structures: User, Area, Item, Action, Puzzle, etc.)
+  handlers/               (HTTP request handlers, validation, response formatting)
+  services/               (business logic: area generation, puzzle solving, item management, player actions)
+  db/                     (Diesel schema, migrations, database models)
+  auth.rs                 (JWT, authentication middleware, user extraction)
+  middleware/             (logging, rate limiting, request validation)
+  error.rs                (AppError enum, error handling)
+  templates/              (Askama HTML templates)
+  config.rs               (configuration from .env)
 
-**Behavior:**
-- When a player enters an area, they see it in the state other players left it
-- No item respawning
-- Items can break during use; broken items can be repaired with right tools
-- **Feature, not bug:** World gradually depletes as players collect items and solve puzzles
-- Players inadvertently help/hinder each other through shared resources
+migrations/               (Diesel migrations, one per file with timestamp)
+  YYYY-MM-DD-HHMMSS_init_schema.sql
+  YYYY-MM-DD-HHMMSS_add_users_table.sql
+  etc.
 
----
+tests/                    (integration tests)
+e2e/                      (Playwright E2E tests)
 
-### 3. Items System
-
-**Item properties:**
-- Name, description
-- **Quality** (starts high, degrades with use; below quality threshold, certain actions are restricted or fail)
-- **Durability** (items can break; broken items can be repaired; quality and durability are tracked separately)
-- Carrying capacity modifier (bag increases capacity, car increases more, rocket enables different areas)
-- Enabled actions (what this item lets the player do; quality thresholds may restrict them)
-- **Connection restrictions** (car can't enter house; small key can't open large locks; boots needed for muddy areas)
-- Connection requirements (car needs roads; boat needs water; wings need open sky)
-- Quality-dependent actions (worn key has lower success rate; rusty lockpick might break inside lock)
-- Repair recipe (what tools/items fix this item if broken)
-
-**Inventory:**
-- Players start with empty inventory
-- Carrying capacity limited by items themselves (base capacity very low, ~1-2 items)
-- Items like bags, carts, vehicles expand capacity
-- Some items enable travel to new areas (boat for water, wings for sky, etc.)
-
-**Item database:**
-- All items catalogued with properties
-- Reusable across areas
-- Can be extended during generation (new item variants created as needed)
+.env.example             (skeleton, maintained in git)
+```
 
 ---
 
-### 4. Actions System
+## Database Schema
 
-**Base actions:**
-- Players always have bare-hand actions (push, pull, examine, etc.)
+### User
+- UUID (primary key)
+- Email (unique)
+- Name
+- Password hash
+- Registration date
+- Last login date
 
-**Item-unlocked actions:**
-- Items enable additional actions (key unlocks, axe chops, etc.)
-- N:N relationship: multiple items can enable same action; one item can enable multiple actions
+### Area
+- UUID (primary key)
+- One-sentence description
+- Full description (generated by AI)
+- Current state (JSON or separate columns)
+- Created at
+- Last modified at
 
-**Action effects:**
-- All actions **permanently modify state** (tree chopped → it's gone forever)
-- Actions are **probabilistic** with multiple possible outcomes
-- Outcomes can be **chainable** (chest explodes → triggers follow-up actions)
-- Quality may affect success rates (worn key has lower success chance)
+### Connection (Edge between areas)
+- From area UUID
+- To area UUID
+- Short description (context for navigation)
 
-**Action database:**
-- All possible actions catalogued
-- Reusable across areas
-- New actions created as needed during generation
+### Item
+- UUID (primary key)
+- Name
+- Description
+- Quality (0-100, degrades with use)
+- Durability (0-100, items break)
+- Carrying capacity modifier
+- Area UUID (current location) or Player UUID (inventory)
+- Enabled actions (n:n relationship)
+- Connection restrictions (JSON or separate table)
+- Repair recipe (JSON)
 
----
+### Action
+- UUID (primary key)
+- Name
+- Description
+- Item requirements (n:n relationship)
+- Effects (state changes)
 
-### 5. Puzzles System
+### Puzzle
+- UUID (primary key)
+- Type
+- Solution actions (n:n relationship with outcomes)
+- Current state (solved/unsolved)
 
-**Puzzle definition:**
-- Puzzle type (locked chest, blocked path, etc.)
-- Set of possible solution actions with outcomes
-- Each action outcome has:
-  - Probability weight
-  - Result (nothing, item destroyed, puzzle solved, unintended consequence)
-  - Follow-up actions triggered (if any)
-
-**Puzzle database:**
-- Catalogue of reusable puzzle templates
-- Can be extended and customized during area generation
-- Reduces AI token usage by pattern reuse
-
-**Multiple solutions:**
-- Each puzzle has multiple possible actions that might solve it
-- Different actions have different probabilities of success
-- Lost items reappear elsewhere for other players (e.g., lost key hidden in area for next player to find)
-
----
-
-## AI Generation Pipeline
-
-### Three-Pass Area Generation
-
-**Pass 1: Context gathering**
-- Load one-sentence descriptions of all connected areas
-- Load short descriptions of all connections (edges)
-- For visited connected areas: load their full detailed descriptions and current state
-- Summarize findings into context document
-
-**Pass 2: Outline**
-- Use context summary + area's one-sentence description to outline:
-  - Area concept and atmosphere
-  - Rough item placement
-  - Puzzle types to include
-  - Expected complexity
-  - Item/vehicle restrictions for this area and its connections
-- Lock outline to prevent drift
-
-**Pass 3: Detailing**
-- Load existing items, actions, puzzles from database
-- Match/reuse where possible; extend/create only if needed
-- Generate detailed area description
-- Generate specific items (with properties and restrictions)
-- Generate specific puzzles (with solution actions/outcomes)
-- Verify generated items are compatible with area restrictions
-- Update database with any new items/actions/puzzles
+### EventLog
+- ID (auto-increment or UUID)
+- User UUID
+- Area UUID
+- Timestamp
+- Action description
+- Outcome (JSON)
 
 ---
 
-## Multiplayer & Real-Time
+## API Endpoints Structure
 
-**Async model (initial):**
-- Players see area snapshot when entering (state from when others left)
-- No real-time interaction
+```
+/api/auth
+  POST /register         (create user)
+  POST /login            (get JWT)
+  POST /logout           (invalidate session)
 
-**Future enhancement:**
-- Real-time events if multiple players in same area
-- Potential collaboration/competition mechanics (TBD during implementation)
+/api/areas
+  GET  /areas            (list nearby unseen areas)
+  GET  /areas/{id}       (get area details)
+  POST /areas/{id}/enter (move to area, get current state)
+  
+/api/areas/{id}/items
+  GET  /                 (list items in area)
+  POST /{item_id}/take   (collect item)
 
----
+/api/areas/{id}/actions
+  POST /                 (perform action on puzzle/object)
 
-## Future Systems (In Scope, TBD)
+/api/player
+  GET  /inventory        (list carried items)
+  GET  /position         (current area)
+  GET  /events           (player's event log)
 
-### Survival Mechanics
-- Hunger, thirst, temperature, fatigue (or subset)
-- Environmental hazards (lava, cold, toxic areas)
-- Consequences for neglect (player incapacity or death)
-- Permadeath vs. respawn model (TBD)
-
-### Building & Crafting
-- Craft items from components
-- Construct permanent structures
-- Modify existing areas
-- Long-term player projects (TBD during implementation)
-
-### Health & Status Effects
-- Injury, status conditions
-- Recovery/treatment items
-- Environmental effects on player ability
-
----
-
-## Anti-Cheating & Randomization
-
-- UUIDs are randomly assigned (prevents coordinate memorization)
-- Area descriptions are unique per UUID (prevents replicating known areas)
-- Connections are semantic (based on descriptions) not coordinate-based (no jumping via grid math)
-- Puzzle outcomes are probabilistic (action A doesn't always succeed)
-- Database persistence makes cheating meaningless (other players see results)
+/api/items
+  GET  /{id}             (get item details)
+  POST /{id}/repair      (repair broken item)
+```
 
 ---
 
-## Server Configuration (GAME.md)
+## Authentication & Sessions
 
-Each server instance defines:
-- Starting area UUID
-- Initial 100 area descriptions (AI-generated or custom)
-- Biome/theme rules (e.g., "areas 1-30 are forest")
-- Difficulty scaling
-- Survival/building feature flags
-- Player interaction rules
-
-Multiple servers = different game worlds with different settings.
+- **Registration**: Username, email, password → hash password, store user
+- **Login**: Email, password → verify, return JWT token
+- **JWT payload**: `{ user_uuid, exp }`
+- **Token storage**: Client-side (cookie or localStorage), sent in `Authorization: Bearer <token>` header
+- **Middleware**: Extract and validate JWT on protected routes
 
 ---
 
-## Critical Implementation Notes
+## Error Handling
 
-### Token Optimization
-- Puzzle database reduces regeneration (pattern reuse)
-- Item database reduces redundant generation
-- Action database prevents duplicate action creation
-- Context summarization (Pass 1) distills multi-area info into compact prompt
+**Custom `AppError` enum** with variants:
+- `NotFound` → 404
+- `Unauthorized` → 401
+- `Forbidden` → 403
+- `ValidationError(String)` → 400
+- `ConflictError(String)` → 409
+- `InternalError(String)` → 500
 
-### Coherence Strategy
-- One-sentence descriptions act as "skeleton keys" guiding generation
-- Semantic connections (via descriptions) prevent impossible transitions
-- Multi-pass generation allows refinement without full regeneration
-- Edge descriptions maintain narrative flow between areas
+**Response format**:
+```json
+{
+  "status": "error",
+  "error": "Error message",
+  "code": "ERROR_CODE"
+}
+```
 
-### Scalability Considerations
-- Graph structure allows infinite world growth
-- Database lookup (existing items/actions/puzzles) faster than regeneration
-- Expansion threshold (50 unseen areas) prevents unbounded generation
-
----
-
-## Data Models (TBD - Detail in Implementation)
-
-- **Area**: UUID, description, connections, items, puzzle states
-- **Item**: UUID, name, quality, durability, restrictions, enabled actions
-- **Action**: UUID, name, item requirements, effects, quality modifiers
-- **Puzzle**: UUID, type, solution actions, outcomes
-- **Event**: user_id, area_id, timestamp, action_description, outcome
+**Success format**:
+```json
+{
+  "status": "ok",
+  "data": { ... }
+}
+```
 
 ---
 
-## Next Steps
+## Middleware & Infrastructure
 
-1. **Tech Stack Decision**: Framework (backend/frontend), database, LLM integration
-2. **Data Schema**: Detailed database design
-3. **MVP Scope**: Which systems in Phase 1 vs. future
-4. **Prototype**: Initial world generation, basic movement/interaction
+### Logging Middleware
+- Log all requests (method, path, status, duration)
+- Log level: WARN for test/prod (defined in .env, DEBUG for dev)
+
+### Rate Limiting Middleware
+- Per IP address: defined in .env
+- Per authenticated user: defined in .env
+- Return 429 (Too Many Requests) when exceeded
+
+### Request Validation Middleware
+- Validate JSON payload schemas
+- Return 400 with validation errors
+
+---
+
+## Configuration (.env)
+
+```
+DATABASE_URL=sqlite://./open_world.db
+JWT_SECRET=<your-secret-key>
+JWT_EXPIRATION_HOURS=24
+LOG_LEVEL=DEBUG
+
+RATE_LIMIT_IP=100               # requests per minute
+RATE_LIMIT_AUTH=500             # requests per minute for authenticated users
+
+INITIAL_CAPACITY=2              # base inventory capacity
+```
+
+---
+
+## Database Migrations
+
+- **Diesel CLI**: `diesel migration generate <name>`
+- **File naming**: `YYYY-MM-DD-HHMMSS_description.sql`
+- **Automatic execution**: Migrations run on app startup
+- **Initial seeding**: Separate seed script (Rust binary) to populate initial 100 areas with short descriptions
+
+---
+
+## Testing Strategy (TDD)
+
+### Unit Tests
+- Built-in Rust `#[test]` attribute
+- Test each service/handler function
+- Mock database with in-memory SQLite or fixtures
+- Every new feature starts with failing unit test
+
+### Integration Tests
+- Located in `tests/` folder
+- Test full endpoint chains (handler → service → DB)
+- Use separate test database
+- Verify request/response contracts
+
+### E2E Tests
+- Playwright for browser automation
+- Test full UI + backend + database flow
+- Examples: user registration → login → move area → collect item
+
+### Test Execution
+- **Locally**: `cargo test` (unit + integration), `npx playwright test` (E2E)
+- **During AI session**: Run before each commit
+- **On GitHub**: CI pipeline runs all test suites on PR/push
+
+### TDD Phases
+1. **Red**: Write failing test
+2. **Yellow**: Implement minimal code
+3. **Green**: Test passes
+4. **Refactor**: Clean up, optimize
+
+**Important**: E2E and integration tests can fail until all unit tests and feature changes are complete.
+
+---
+
+## Development Workflow
+
+1. **Write failing test** (red phase)
+2. **Implement minimal code** (yellow phase)
+3. **Test passes** (green phase)
+4. **Refactor and optimize** (refactor phase)
+5. **Commit and push**
+
+All changes follow TDD. Run tests before every commit.
