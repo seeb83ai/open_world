@@ -7,8 +7,8 @@ use sqlx::SqlitePool;
 use serde_json::json;
 
 use crate::{
-    error::{AppError, AppResult},
-    models::{RegisterRequest, LoginRequest, AuthResponse},
+    error::AppResult,
+    models::{RegisterRequest, LoginRequest},
 };
 
 pub async fn register(
